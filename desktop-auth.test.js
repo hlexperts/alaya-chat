@@ -38,15 +38,21 @@ test('ensureDesktopParam appends desktop=1 when missing', () => {
   );
 });
 
-test('isExternalOAuthUrl matches Google OAuth navigations', () => {
-  assert.equal(isExternalOAuthUrl('https://chat.alaya.co/oauth/google'), true);
-  assert.equal(isExternalOAuthUrl('https://chat.alaya.co/oauth/google?desktop=1'), true);
+test('isExternalOAuthUrl matches Google OAuth navigations on configured host', () => {
+  const host = 'https://chat.alaya.co';
+  assert.equal(isExternalOAuthUrl('https://chat.alaya.co/oauth/google', host), true);
+  assert.equal(isExternalOAuthUrl('https://chat.alaya.co/oauth/google?desktop=1', host), true);
   assert.equal(
-    isExternalOAuthUrl('https://accounts.google.com/o/oauth2/v2/auth?client_id=x'),
+    isExternalOAuthUrl('https://accounts.google.com/o/oauth2/v2/auth?client_id=x', host),
     true,
   );
-  assert.equal(isExternalOAuthUrl('https://chat.alaya.co/c/new'), false);
-  assert.equal(isExternalOAuthUrl('https://chat.alaya.co/oauth/google/callback'), false);
+  assert.equal(isExternalOAuthUrl('https://chat.alaya.co/c/new', host), false);
+  assert.equal(isExternalOAuthUrl('https://chat.alaya.co/oauth/google/callback', host), false);
+  assert.equal(isExternalOAuthUrl('https://evil.example/oauth/google', host), false);
+  assert.equal(
+    isExternalOAuthUrl('https://chat.alaya.co/oauth/google', 'https://other.alaya.co'),
+    false,
+  );
 });
 
 test('exchangeDesktopOtt POSTs token/state and returns tokens', async () => {

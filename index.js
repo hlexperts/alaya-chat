@@ -90,7 +90,8 @@ function registerProtocolClient() {
 }
 
 function openOAuthExternally(url) {
-  const externalUrl = isExternalOAuthUrl(url) && url.includes('/oauth/google')
+  const serverHost = getServerHost();
+  const externalUrl = isExternalOAuthUrl(url, serverHost) && url.includes('/oauth/google')
     ? ensureDesktopParam(url)
     : url;
   shell.openExternal(externalUrl);
@@ -98,7 +99,7 @@ function openOAuthExternally(url) {
 
 function attachOAuthExternalHandlers(win) {
   const maybeExternal = (url) => {
-    if (!isExternalOAuthUrl(url)) return false;
+    if (!isExternalOAuthUrl(url, getServerHost())) return false;
     openOAuthExternally(url);
     return true;
   };

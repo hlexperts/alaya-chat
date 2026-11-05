@@ -45,11 +45,14 @@ export function ensureDesktopParam(url) {
   return parsed.toString();
 }
 
-export function isExternalOAuthUrl(url) {
+export function isExternalOAuthUrl(url, serverHost = DEFAULT_HOST) {
   try {
     const parsed = new URL(url);
     if (parsed.hostname === 'accounts.google.com') return true;
-    // Initiate Google OAuth only — not the callback (handled in-app / browser).
+    // Initiate Google OAuth only on the configured server host — not the callback
+    // and not arbitrary /oauth/google paths on other hosts.
+    const expectedHost = new URL(normalizeServerHost(serverHost)).host;
+    if (parsed.host !== expectedHost) return false;
     if (parsed.pathname === '/oauth/google' || parsed.pathname.endsWith('/oauth/google')) {
       return true;
     }
