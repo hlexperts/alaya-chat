@@ -9,6 +9,7 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
+    "test": "node --test desktop-auth.test.js",
     "app:dist": "electron-builder",
     "app:dist:mac": "electron-builder --mac",
     "app:dist:win": "electron-builder --win",
@@ -16,6 +17,10 @@
   },
   "build": {
     "appId": "com.librechat-ui",
+    "protocols": {
+      "name": "alayachat",
+      "schemes": ["alayachat"]
+    },
     "mac": {
       "category": "public.ai.chat.librechat",
       "artifactName": "${productName}-v${version}-mac.${ext}",

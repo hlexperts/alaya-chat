@@ -1,10 +1,22 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, globalShortcut } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, Menu, globalShortcut, shell, session } from "electron";
 import path from "path";
 import { fileURLToPath } from "url";
 import Store from "electron-store";
 import { OpenPanel } from '@openpanel/sdk';
 import { randomUUID } from 'crypto';
 import isDev from 'electron-is-dev';
+import {
+  DEFAULT_HOST,
+  PARTITION,
+  PROTOCOL,
+  normalizeServerHost,
+  parseAuthDeepLink,
+  ensureDesktopParam,
+  isExternalOAuthUrl,
+  exchangeDesktopOtt,
+  applySessionCookies,
+  findDeepLinkInArgv,
+} from './desktop-auth.js';
 
 // Fix for __dirname in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -22,6 +34,7 @@ app.disableHardwareAcceleration();
 
 let mainWindow = null;
 let loginWindow = null;
+let authDeepLinkInFlight = false;
 
 let opClient = null;
 
@@ -33,9 +46,6 @@ if (!isDev) {
     console.error(
       "Error: OPENPANEL_CLIENT_ID or OPENPANEL_CLIENT_SECRET is not defined in the environment variables."
     );
-    // Optionally, you might want to prevent the app from running further
-    // if these variables are critical.
-    // app.quit();
   } else {
     opClient = new OpenPanel({
       clientId: clientId,
@@ -63,6 +73,103 @@ function getUniqueComputerId() {
   return computerId;
 }
 
+function getServerHost() {
+  return normalizeServerHost(store.get('serverHost') || DEFAULT_HOST);
+}
+
+function registerProtocolClient() {
+  if (process.defaultApp) {
+    if (process.argv.length >= 2) {
+      app.setAsDefaultProtocolClient(PROTOCOL, process.execPath, [
+        path.resolve(process.argv[1]),
+      ]);
+      return;
+    }
+  }
+  app.setAsDefaultProtocolClient(PROTOCOL);
+}
+
+function openOAuthExternally(url) {
+  const serverHost = getServerHost();
+  const externalUrl = isExternalOAuthUrl(url, serverHost) && url.includes('/oauth/google')
+    ? ensureDesktopParam(url)
+    : url;
+  shell.openExternal(externalUrl);
+}
+
+function attachOAuthExternalHandlers(win) {
+  const maybeExternal = (url) => {
+    if (!isExternalOAuthUrl(url, getServerHost())) return false;
+    openOAuthExternally(url);
+    return true;
+  };
+
+  win.webContents.on('will-navigate', (event, url) => {
+    if (maybeExternal(url)) event.preventDefault();
+  });
+
+  win.webContents.on('will-redirect', (event, url) => {
+    if (maybeExternal(url)) event.preventDefault();
+  });
+
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (maybeExternal(url)) return { action: 'deny' };
+    return { action: 'allow' };
+  });
+}
+
+async function handleAuthDeepLink(url) {
+  const parsed = parseAuthDeepLink(url);
+  if (!parsed) {
+    console.warn('Ignoring unrecognized deep link:', url);
+    return;
+  }
+  if (authDeepLinkInFlight) {
+    console.warn('Auth deep link already in progress; ignoring duplicate');
+    return;
+  }
+
+  authDeepLinkInFlight = true;
+  try {
+    const serverHost = getServerHost();
+    const tokens = await exchangeDesktopOtt({
+      serverHost,
+      token: parsed.token,
+      state: parsed.state,
+    });
+
+    if (!tokens?.refreshToken) {
+      throw new Error('exchange response missing refreshToken');
+    }
+
+    const ses = session.fromPartition(PARTITION);
+    // Discovery: access JWT is not a cookie — SPA obtains it via /api/auth/refresh
+    // after refreshToken + token_provider cookies are present.
+    await applySessionCookies(ses.cookies, {
+      cookieUrl: serverHost,
+      refreshToken: tokens.refreshToken,
+    });
+
+    store.set('serverHost', serverHost);
+
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      createMainWindow(serverHost);
+    } else {
+      await mainWindow.loadURL(serverHost);
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  } catch (err) {
+    console.error('Failed to complete desktop auth handoff:', err);
+    dialog.showErrorBox(
+      'Sign-in failed',
+      'Could not complete Google sign-in for Alaya Chat. Please try again.',
+    );
+  } finally {
+    authDeepLinkInFlight = false;
+  }
+}
+
 function createLoginWindow() {
   loginWindow = new BrowserWindow({
     width: 600,
@@ -70,6 +177,7 @@ function createLoginWindow() {
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
+      partition: PARTITION,
     },
     icon: path.join(__dirname, "build", "assets", "icon.icns"),
     resizable: false,
@@ -87,17 +195,17 @@ function createMainWindow(serverHost) {
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
+      partition: PARTITION,
       preload: path.join(__dirname, 'preload.js')
     },
     icon: path.join(__dirname, "build", "assets", "icon.icns"),
   });
 
-  const url = serverHost.startsWith("http")
-    ? serverHost
-    : `https://${serverHost}`;
+  const url = normalizeServerHost(serverHost);
 
   console.log("Loading URL:", url);
   mainWindow.loadURL(url);
+  attachOAuthExternalHandlers(mainWindow);
 
   app.setName("LibreChat UI");
 
@@ -106,44 +214,72 @@ function createMainWindow(serverHost) {
   }
 
   // Call function to build menu
-  buildMenu(serverHost); // Pass serverHost to buildMenu
-
-
+  buildMenu(url);
 }
 
 function initialize() {
-  const savedHost = store.get("serverHost");
+  let savedHost = store.get("serverHost");
   console.log("Saved host:", savedHost);
-  if (savedHost) {
-    createMainWindow(savedHost);
-  } else {
-    createLoginWindow();
+  if (!savedHost) {
+    store.set("serverHost", DEFAULT_HOST);
+    savedHost = DEFAULT_HOST;
   }
+  createMainWindow(savedHost);
 }
 
+// Single-instance lock so win/linux deep links arrive on second-instance.
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, argv) => {
+    const deepLink = findDeepLinkInArgv(argv);
+    if (deepLink) {
+      handleAuthDeepLink(deepLink);
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
 
+  // macOS deep link (also fires for cold start after ready in some Electron versions)
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    if (app.isReady()) {
+      handleAuthDeepLink(url);
+    } else {
+      app.whenReady().then(() => handleAuthDeepLink(url));
+    }
+  });
 
-app.whenReady().then(async () => {
-  console.log("App is ready");
+  // Capture cold-start deep link from argv (Windows/Linux packaged).
+  const coldStartDeepLink = findDeepLinkInArgv(process.argv);
 
-  if (!isDev) {
-    // Get current platform flag if using insecure protocol
-    const currentPlatform = process.platform;
+  app.whenReady().then(async () => {
+    console.log("App is ready");
+    registerProtocolClient();
 
-    // Enhanced tracking with normalized platform name
-    if (opClient)
-      opClient.track("app_started", {
-        os: platformMap[currentPlatform] || currentPlatform,
-        arch: process.arch,
-        is_packaged: app.isPackaged,
-      });
-  }
+    if (!isDev) {
+      const currentPlatform = process.platform;
+      if (opClient)
+        opClient.track("app_started", {
+          os: platformMap[currentPlatform] || currentPlatform,
+          arch: process.arch,
+          is_packaged: app.isPackaged,
+        });
+    }
 
-  initialize();
+    initialize();
 
-  const { default: initializeShortcuts } = await import('./shortcuts.cjs');
-  initializeShortcuts(globalShortcut, mainWindow);
-});
+    if (coldStartDeepLink) {
+      await handleAuthDeepLink(coldStartDeepLink);
+    }
+
+    const { default: initializeShortcuts } = await import('./shortcuts.cjs');
+    initializeShortcuts(globalShortcut, mainWindow);
+  });
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
@@ -156,8 +292,6 @@ app.on("activate", () => {
     initialize();
   }
 });
-
-
 
 ipcMain.on("submit-server-host", (event, serverHost) => {
   console.log("Saving server host:", serverHost);
@@ -187,7 +321,7 @@ ipcMain.on("submit-server-host", (event, serverHost) => {
       });
   } else {
     // If it's HTTPS or another protocol, proceed without warning
-    store.set("serverHost", serverHost);
+    store.set("serverHost", normalizeServerHost(serverHost));
     createMainWindow(serverHost);
   }
 });
@@ -331,8 +465,8 @@ function buildMenu(serverHost) { // Take serverHost as argument
         {
           label: 'Learn More',
           click: async () => {
-            const { shell } = require('electron')
-            await shell.openExternal('https://github.com/leikoilja/librechat-ui')
+            const { shell: helpShell } = await import('electron');
+            await helpShell.openExternal('https://github.com/leikoilja/librechat-ui')
           }
         },
         {
