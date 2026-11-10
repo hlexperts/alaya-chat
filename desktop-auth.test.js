@@ -23,34 +23,34 @@ test('parseAuthDeepLink returns null for non-auth deep links', () => {
 test('buildDesktopOauthUrl appends desktop=1', () => {
   assert.equal(
     buildDesktopOauthUrl('https://chat.alaya.co'),
-    'https://chat.alaya.co/oauth/google?desktop=1',
+    'https://chat.alaya.co/oauth/openid?desktop=1',
   );
 });
 
 test('ensureDesktopParam appends desktop=1 when missing', () => {
   assert.equal(
-    ensureDesktopParam('https://chat.alaya.co/oauth/google'),
-    'https://chat.alaya.co/oauth/google?desktop=1',
+    ensureDesktopParam('https://chat.alaya.co/oauth/openid'),
+    'https://chat.alaya.co/oauth/openid?desktop=1',
   );
   assert.equal(
-    ensureDesktopParam('https://chat.alaya.co/oauth/google?desktop=1'),
-    'https://chat.alaya.co/oauth/google?desktop=1',
+    ensureDesktopParam('https://chat.alaya.co/oauth/openid?desktop=1'),
+    'https://chat.alaya.co/oauth/openid?desktop=1',
   );
 });
 
-test('isExternalOAuthUrl matches Google OAuth navigations on configured host', () => {
+test('isExternalOAuthUrl matches OpenID navigations on configured host', () => {
   const host = 'https://chat.alaya.co';
-  assert.equal(isExternalOAuthUrl('https://chat.alaya.co/oauth/google', host), true);
-  assert.equal(isExternalOAuthUrl('https://chat.alaya.co/oauth/google?desktop=1', host), true);
+  assert.equal(isExternalOAuthUrl('https://chat.alaya.co/oauth/openid', host), true);
+  assert.equal(isExternalOAuthUrl('https://chat.alaya.co/oauth/openid?desktop=1', host), true);
   assert.equal(
     isExternalOAuthUrl('https://accounts.google.com/o/oauth2/v2/auth?client_id=x', host),
     true,
   );
   assert.equal(isExternalOAuthUrl('https://chat.alaya.co/c/new', host), false);
-  assert.equal(isExternalOAuthUrl('https://chat.alaya.co/oauth/google/callback', host), false);
-  assert.equal(isExternalOAuthUrl('https://evil.example/oauth/google', host), false);
+  assert.equal(isExternalOAuthUrl('https://chat.alaya.co/oauth/openid/callback', host), false);
+  assert.equal(isExternalOAuthUrl('https://evil.example/oauth/openid', host), false);
   assert.equal(
-    isExternalOAuthUrl('https://chat.alaya.co/oauth/google', 'https://other.alaya.co'),
+    isExternalOAuthUrl('https://chat.alaya.co/oauth/openid', 'https://other.alaya.co'),
     false,
   );
 });

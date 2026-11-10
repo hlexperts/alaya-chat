@@ -34,7 +34,8 @@ export function parseAuthDeepLink(url) {
 
 export function buildDesktopOauthUrl(serverHost) {
   const base = normalizeServerHost(serverHost);
-  return `${base}/oauth/google?desktop=1`;
+  // TECHY-1984: Chat login is Google OpenID, not Google social.
+  return `${base}/oauth/openid?desktop=1`;
 }
 
 export function ensureDesktopParam(url) {
@@ -49,11 +50,14 @@ export function isExternalOAuthUrl(url, serverHost = DEFAULT_HOST) {
   try {
     const parsed = new URL(url);
     if (parsed.hostname === 'accounts.google.com') return true;
-    // Initiate Google OAuth only on the configured server host — not the callback
-    // and not arbitrary /oauth/google paths on other hosts.
+    // Initiate OpenID only on the configured server host — not the callback
+    // and not arbitrary /oauth/openid paths on other hosts.
     const expectedHost = new URL(normalizeServerHost(serverHost)).host;
     if (parsed.host !== expectedHost) return false;
-    if (parsed.pathname === '/oauth/google' || parsed.pathname.endsWith('/oauth/google')) {
+    if (
+      parsed.pathname === '/oauth/openid' ||
+      parsed.pathname.endsWith('/oauth/openid')
+    ) {
       return true;
     }
     return false;
